@@ -1,0 +1,36 @@
+{
+  "session_id": "65c354f8-1099-4d1d-937a-cce08401d982",
+  "created_at": "2026-01-30T14:07:08.409345Z",
+  "last_updated": "2026-01-30T14:07:08.412344Z",
+  "turns": [
+    {
+      "timestamp": "2026-01-30T14:07:08.411348Z",
+      "user_query": "hi",
+      "main_planner": {
+        "execution_path": "respond_only",
+        "context_domains": [],
+        "confidence": 1.0,
+        "reasoning": "General greeting"
+      },
+      "planner": {
+        "summary": "Direct response generated",
+        "tool_calls": []
+      },
+      "perception_summary": "General greeting",
+      "plan_summary": "Direct response generated",
+      "action_results": "Direct response generated",
+      "final_response": "Hello. It's nice to meet you. I'm here to help with your Gmail and Google Calendar needs. I can assist with tasks such as scheduling meetings, sending emails, and checking availability. I also want to assure you that I handle your information with care and prioritize your privacy and security. \n\nIf you have any questions or need help with something specific, feel free to ask. I can explain how I work and what I can do to support you.",
+      "status": "success",
+      "duration_seconds": 0.43,
+      "metadata": {
+        "agents_involved": [
+          "supervisor",
+          "main_planner",
+          "planner"
+        ],
+        "execution_path": "respond_only",
+        "error": null
+      }
+    }
+  ]
+}

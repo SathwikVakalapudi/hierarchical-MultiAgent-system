@@ -1,0 +1,38 @@
+{
+  "session_id": "8212b5ee-94ed-4fea-9188-90148943c7d5",
+  "created_at": "2026-01-30T14:08:46.988957Z",
+  "last_updated": "2026-01-30T14:08:46.991956Z",
+  "turns": [
+    {
+      "timestamp": "2026-01-30T14:08:46.991956Z",
+      "user_query": "check my today's mails",
+      "main_planner": {
+        "execution_path": "perceive_only",
+        "context_domains": [
+          "gmail"
+        ],
+        "confidence": 1.0,
+        "reasoning": "Read-only email query"
+      },
+      "planner": {
+        "summary": "Here are the emails I found:\n- EaseMyTrip <connect@easemytrip.com>: Thailand Group Departure from Mumbai\n- \"jobs trabajo.org\" <info@trabajo.org>: Jobs for Generative AI Trainee Software Engineer Jobs Opening in AiGenLabs Software Solutions at Hyderabad-Ot at Hyderabad",
+        "tool_calls": []
+      },
+      "perception_summary": "Read-only email query",
+      "plan_summary": "Here are the emails I found:\n- EaseMyTrip <connect@easemytrip.com>: Thailand Group Departure from Mumbai\n- \"jobs trabajo.org\" <info@trabajo.org>: Jobs for Generative AI Trainee Software Engineer Jobs Opening in AiGenLabs Software Solutions at Hyderabad-Ot at Hyderabad",
+      "action_results": "Here are the emails I found:\n- EaseMyTrip <connect@easemytrip.com>: Thailand Group Departure from Mumbai\n- \"jobs trabajo.org\" <info@trabajo.org>: Jobs for Generative AI Trainee Software Engineer Jobs Opening in AiGenLabs Software Solutions at Hyderabad-Ot at Hyderabad",
+      "final_response": "Here are the emails I found:\n- EaseMyTrip <connect@easemytrip.com>: Thailand Group Departure from Mumbai\n- \"jobs trabajo.org\" <info@trabajo.org>: Jobs for Generative AI Trainee Software Engineer Jobs Opening in AiGenLabs Software Solutions at Hyderabad-Ot at Hyderabad",
+      "status": "success",
+      "duration_seconds": 55.44,
+      "metadata": {
+        "agents_involved": [
+          "supervisor",
+          "main_planner",
+          "planner"
+        ],
+        "execution_path": "perceive_only",
+        "error": null
+      }
+    }
+  ]
+}
