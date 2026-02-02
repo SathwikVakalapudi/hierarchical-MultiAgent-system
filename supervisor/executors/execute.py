@@ -1,7 +1,7 @@
 """
-supervisor.executors.execute - Universal Parallel Tool Execution Engine
-FINAL PRODUCTION VERSION – December 2025 → January 2026 (updated for args/arguments compatibility)
-Full nested execution + debug logging + safe async handling
+supervisor.executors.execute
+Universal Parallel Tool Execution Engine
+FINAL PRODUCTION VERSION – January 2026
 """
 
 import asyncio
@@ -16,192 +16,180 @@ from core.message import Message
 from core.protocols import PLAN, EXECUTION_RESULT
 
 # Low-level tools
-from tools.calendar.functions import add_event, delete_event_natural, get_calendar_events, delete_all_events_on_date
+from tools.calendar.functions import (
+    add_event,
+    delete_event_natural,
+    get_calendar_events,
+    delete_all_events_on_date,
+)
 from tools.gmail.sender import send_simple_mail
 from tools.gmail.query_engine import process_gmail_query
 
-# High-level intelligent agents
+# High-level agents
 from tools.calendar.agent import CalendarAgent
 from tools.gmail.agent import EmailAgent
 
 
+# ---------------------------------------------------------------------
+# TOOL EXECUTOR
+# ---------------------------------------------------------------------
+
 class ToolExecutor:
     def __init__(self, llm_client):
         print("\n" + "=" * 80)
-        print("[INIT] ToolExecutor initialization started")
+        print("[INIT] ToolExecutor starting")
         print("=" * 80)
 
         self.llm_client = llm_client
-        self.calendar_agent = CalendarAgent(self.llm_client)
-        self.email_agent = EmailAgent(self.llm_client)
+        self.calendar_agent = CalendarAgent(llm_client)
+        self.email_agent = EmailAgent(llm_client)
 
         self.tools: Dict[str, Callable] = {
+            # Calendar
             "get_calendar_events": get_calendar_events,
             "add_event": add_event,
             "delete_event_natural": delete_event_natural,
             "delete_all_events_on_date": delete_all_events_on_date,
+
+            # Gmail
             "process_gmail_query": process_gmail_query,
             "send_simple_mail": send_simple_mail,
+
+            # Agents
             "run_calendar_agent": self._run_calendar_agent,
             "run_email_agent": self._run_email_agent,
         }
 
-        print(f"[INIT] Registered {len(self.tools)} tools:")
-        for name in self.tools:
-            print(f"   → {name}")
+        print(f"[INIT] Registered tools ({len(self.tools)}):")
+        for t in self.tools:
+            print(f"   • {t}")
+
         print("[INIT] ToolExecutor READY")
         print("=" * 80 + "\n")
 
-    # ======================================================================
-    # AGENT DELEGATION WRAPPERS
-    # ======================================================================
+    # =====================================================================
+    # AGENT WRAPPERS
+    # =====================================================================
 
     async def _run_calendar_agent(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        print("\n[AGENT → CalendarAgent] START")
+        print("\n[AGENT → CalendarAgent]")
         dry_run = input_data.pop("dry_run", False)
-        print(f"[AGENT → CalendarAgent] dry_run = {dry_run}")
-        print("[AGENT → CalendarAgent] Input:")
+
+        print(f"dry_run = {dry_run}")
+        print("Input:")
         print(json.dumps(input_data, indent=2))
 
         result = self.calendar_agent.process(input_data)
 
-        print("[AGENT → CalendarAgent] OUTPUT:")
+        print("Output:")
         print(json.dumps(result, indent=2))
-        print("[AGENT → CalendarAgent] END\n")
         return result
 
     async def _run_email_agent(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        print("\n[AGENT → EmailAgent] START")
+        print("\n[AGENT → EmailAgent]")
         dry_run = input_data.pop("dry_run", False)
-        print(f"[AGENT → EmailAgent] dry_run = {dry_run}")
-        print("[AGENT → EmailAgent] Input:")
+
+        print(f"dry_run = {dry_run}")
+        print("Input:")
         print(json.dumps(input_data, indent=2))
 
         result = self.email_agent.process(input_data, dry_run=dry_run)
 
-        print("[AGENT → EmailAgent] OUTPUT:")
+        print("Output:")
         print(json.dumps(result, indent=2))
-        print("[AGENT → EmailAgent] END\n")
         return result
 
-    # ======================================================================
+    # =====================================================================
     # SINGLE TOOL EXECUTION
-    # ======================================================================
+    # =====================================================================
 
     async def _execute_single(self, tool_call: Dict[str, Any], index: int) -> Dict[str, Any]:
+        tool_name = tool_call.get("name")
+        started_at = datetime.utcnow().isoformat()
+
         print("\n" + "-" * 80)
-        print(f"[EXECUTE #{index}] {tool_call.get('name', 'unknown')}")
+        print(f"[EXEC #{index}] Tool: {tool_name}")
         print("-" * 80)
 
-        started_at = datetime.utcnow().isoformat()
-        tool_name = tool_call.get("name")
+        arguments = tool_call.get("arguments") or tool_call.get("args") or {}
 
-        # ─── FIXED: support both "arguments" (OpenAI-style) and "args" (Groq/CalendarAgent-style) ───
-        arguments = tool_call.get("arguments") or tool_call.get("args", {})
-
-        # Optional: warn when arguments are empty (helps debugging)
-        if not arguments:
-            print(f"[EXECUTE #{index}] WARNING: No arguments received for tool '{tool_name}'")
-
-        if not tool_name or tool_name not in self.tools:
-            error = "Invalid or unknown tool"
-            print(f"[EXECUTE #{index}] ERROR: {error}")
-            return {
-                "index": index,
-                "tool": tool_name or "unknown",
-                "success": False,
-                "error": error,
-                "started_at": started_at,
-                "finished_at": datetime.utcnow().isoformat(),
-            }
+        if tool_name not in self.tools:
+            error = f"Unknown tool: {tool_name}"
+            print(f"[EXEC #{index}] ERROR → {error}")
+            return self._fail(index, tool_name, error, arguments, started_at)
 
         tool_func = self.tools[tool_name]
 
         try:
-            # ---- SAFE JSON LOGGING ----
-            print(f"[EXECUTE #{index}] Arguments:")
-            print(json.dumps(arguments, indent=2))
+            print("[ARGS]")
+            print(json.dumps(arguments, indent=2) if arguments else "(none)")
 
-            # ---- SPECIAL HANDLING: delete_event_natural ----
+            # Special case: delete_event_natural needs llm_client
             if tool_name == "delete_event_natural":
-                print(f"[EXECUTE #{index}] Running delete_event_natural with injected llm_client")
-
-                if inspect.iscoroutinefunction(tool_func):
-                    result = await tool_func(
-                        **arguments,
-                        llm_client=self.llm_client
-                    )
-                else:
-                    loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(
-                        None,
-                        partial(tool_func, **arguments, llm_client=self.llm_client)
-                    )
-
-            # ---- NORMAL TOOL EXECUTION PATH ----
+                result = await self._run_with_llm(tool_func, arguments)
             else:
-                if inspect.iscoroutinefunction(tool_func):
-                    print(f"[EXECUTE #{index}] Running ASYNC tool")
-                    result = await tool_func(**arguments)
-                else:
-                    print(f"[EXECUTE #{index}] Running SYNC tool in thread pool")
-                    loop = asyncio.get_event_loop()
-                    result = await loop.run_in_executor(
-                        None,
-                        partial(tool_func, **arguments)
-                    )
+                result = await self._run_tool(tool_func, arguments)
 
             finished_at = datetime.utcnow().isoformat()
-            print(f"[EXECUTE #{index}] SUCCESS")
-            print(f"[EXECUTE #{index}] Result:")
-            print(json.dumps(result, indent=2) if isinstance(result, (dict, list)) else result)
+            print(f"[EXEC #{index}] SUCCESS")
 
             return {
                 "index": index,
                 "tool": tool_name,
                 "success": True,
-                "result": result,
                 "arguments": arguments,
+                "result": result,
                 "started_at": started_at,
                 "finished_at": finished_at,
             }
 
         except Exception as e:
-            finished_at = datetime.utcnow().isoformat()
-            print(f"[EXECUTE #{index}] FAILED: {str(e)}")
+            print(f"[EXEC #{index}] FAILED → {e}")
             print(traceback.format_exc())
+            return self._fail(index, tool_name, str(e), arguments, started_at)
 
-            return {
-                "index": index,
-                "tool": tool_name,
-                "success": False,
-                "error": str(e),
-                "arguments": arguments,
-                "started_at": started_at,
-                "finished_at": finished_at,
-            }
+    async def _run_tool(self, func: Callable, arguments: Dict[str, Any]):
+        if inspect.iscoroutinefunction(func):
+            return await func(**arguments)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, partial(func, **arguments))
 
-    # ======================================================================
+    async def _run_with_llm(self, func: Callable, arguments: Dict[str, Any]):
+        if inspect.iscoroutinefunction(func):
+            return await func(**arguments, llm_client=self.llm_client)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, partial(func, **arguments, llm_client=self.llm_client)
+        )
+
+    def _fail(self, index, tool, error, arguments, started_at):
+        return {
+            "index": index,
+            "tool": tool,
+            "success": False,
+            "error": error,
+            "arguments": arguments,
+            "started_at": started_at,
+            "finished_at": datetime.utcnow().isoformat(),
+        }
+
+    # =====================================================================
     # BATCH EXECUTION
-    # ======================================================================
+    # =====================================================================
 
     async def _execute_batch(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not tool_calls:
             return []
-        print(f"\n[PARALLEL] Executing {len(tool_calls)} tool(s) in parallel")
-        return await asyncio.gather(*[
-            self._execute_single(call, i) for i, call in enumerate(tool_calls)
-        ])
+        print(f"\n[PARALLEL] Executing {len(tool_calls)} tool(s)")
+        return await asyncio.gather(
+            *[self._execute_single(call, i) for i, call in enumerate(tool_calls)]
+        )
 
-    # ======================================================================
+    # =====================================================================
     # MAIN ASYNC PIPELINE
-    # ======================================================================
+    # =====================================================================
 
     async def _handle_async(self, message: Message) -> Message:
-        print("\n" + "=" * 80)
-        print("TOOL EXECUTION PHASE STARTED")
-        print("=" * 80)
-
         if message.type != PLAN:
             raise ValueError(f"Expected PLAN message, got {message.type}")
 
@@ -209,84 +197,74 @@ class ToolExecutor:
         tool_calls = payload.get("tool_calls", [])
 
         if not tool_calls:
-            print("No tool calls → nothing to do")
             return Message(EXECUTION_RESULT, {
                 "executions": [],
-                "summary": payload.get("summary", "No actions required")
+                "summary": payload.get("summary", "No actions required"),
             })
 
-        print(f"Top-level tool calls: {len(tool_calls)}")
+        print(f"\n[EXECUTION] Top-level tool calls: {len(tool_calls)}")
 
-        all_executions = []
-        final_summaries = []
-
-        # Execute top-level tools (may include agents)
         executions = await self._execute_batch(tool_calls)
-        all_executions.extend(executions)
+        all_execs = list(executions)
+        summaries: List[str] = []
 
-        # Collect nested tool_calls from agent outputs
-        nested_calls = []
+        # Collect nested calls (from agents only)
+        nested_calls: List[Dict[str, Any]] = []
+
         for exe in executions:
-            if exe["success"]:
-                result = exe.get("result", {})
-                if isinstance(result, dict):
-                    tool_calls_list = result.get("tool_calls", [])
-                    if tool_calls_list:
-                        print(f"\n[NESTED] Found {len(tool_calls_list)} nested tool call(s) from {exe['tool']}")
-                        # Optional: show what exactly is coming from the agent
-                        print("[NESTED RAW CALLS]")
-                        print(json.dumps(tool_calls_list, indent=2))
-                        nested_calls.extend(tool_calls_list)
-                    if result.get("changes_summary"):
-                        final_summaries.append(result["changes_summary"])
+            if not exe["success"]:
+                summaries.append(f"Failed: {exe.get('error')}")
+                continue
 
-        # Execute nested actions
+            result = exe.get("result", {})
+            if not isinstance(result, dict):
+                continue
+
+            if result.get("tool_calls"):
+                nested_calls.extend(result["tool_calls"])
+
+            if result.get("changes_summary"):
+                summaries.append(result["changes_summary"])
+
+        # Execute nested calls
         if nested_calls:
-            print(f"\n[NESTED] Executing {len(nested_calls)} nested action(s)")
+            print(f"\n[NESTED] Executing {len(nested_calls)} nested tool(s)")
             nested_execs = await self._execute_batch(nested_calls)
-            all_executions.extend(nested_execs)
+            all_execs.extend(nested_execs)
 
             for exe in nested_execs:
                 if exe["success"]:
-                    res = exe.get("result", {})
-                    summary = (
-                        res.get("changes_summary") or
-                        res.get("message") or
-                        f"{exe['tool']} completed"
+                    summaries.append(
+                        exe.get("result", {}).get("message")
+                        or f"{exe['tool']} completed"
                     )
-                    final_summaries.append(summary)
                 else:
-                    final_summaries.append(f"Failed: {exe.get('error')}")
+                    summaries.append(f"Failed: {exe.get('error')}")
 
-        final_summary = "; ".join(final_summaries) if final_summaries else "Actions completed"
+        final_summary = "; ".join(summaries) or "Actions completed"
 
-        print("\n" + "=" * 80)
-        print("EXECUTION COMPLETE")
-        print(f"Total executions: {len(all_executions)}")
-        print(f"Final Summary: {final_summary}")
-        print("=" * 80 + "\n")
+        print("\n[EXECUTION COMPLETE]")
+        print(final_summary)
 
-        return Message(
-            EXECUTION_RESULT,
-            {
-                "executions": all_executions,
-                "summary": final_summary
-            }
-        )
+        return Message(EXECUTION_RESULT, {
+            "executions": all_execs,
+            "summary": final_summary,
+        })
 
-    # ======================================================================
+    # =====================================================================
     # SYNC ENTRYPOINT
-    # ======================================================================
+    # =====================================================================
 
     def handle(self, message: Message) -> Message:
-        """Synchronous wrapper that safely runs the async pipeline"""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.create_task(self._handle_async(message))
-            else:
-                return loop.run_until_complete(self._handle_async(message))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self._handle_async(message))
+
+        if loop.is_running():
+            raise RuntimeError(
+                "ToolExecutor.handle() called inside an active event loop. "
+                "Use `await _handle_async()` instead."
+            )
+
+        return loop.run_until_complete(self._handle_async(message))

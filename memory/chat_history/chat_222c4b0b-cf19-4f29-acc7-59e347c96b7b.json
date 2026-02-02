@@ -1,0 +1,36 @@
+{
+  "session_id": "222c4b0b-cf19-4f29-acc7-59e347c96b7b",
+  "created_at": "2026-01-31T03:35:58.618095Z",
+  "last_updated": "2026-01-31T03:35:58.620042Z",
+  "turns": [
+    {
+      "timestamp": "2026-01-31T03:35:58.620042Z",
+      "user_query": "hello how are u",
+      "main_planner": {
+        "execution_path": "respond_only",
+        "context_domains": [],
+        "confidence": 1.0,
+        "reasoning": "General greeting"
+      },
+      "planner": {
+        "summary": "Direct response generated",
+        "tool_calls": []
+      },
+      "perception_summary": "General greeting",
+      "plan_summary": "Direct response generated",
+      "action_results": "Direct response generated",
+      "final_response": "Hello. I'm doing well, thanks for asking. I'm ready to help you with any questions or tasks you might have, whether it's managing your Gmail or Google Calendar. **I can assist with scheduling meetings, sending emails, checking availability, and even summarizing your inbox**. How can I help you today?",
+      "status": "success",
+      "duration_seconds": 0.33,
+      "metadata": {
+        "agents_involved": [
+          "supervisor",
+          "main_planner",
+          "planner"
+        ],
+        "execution_path": "respond_only",
+        "error": null
+      }
+    }
+  ]
+}

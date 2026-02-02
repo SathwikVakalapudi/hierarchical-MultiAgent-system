@@ -2,14 +2,13 @@ from __future__ import annotations
 
 """
 tools.gmail.llm - Pure LLM functions for Gmail intelligence
-GLOBAL CLIENT VERSION – January 2026
+FINAL PRODUCTION VERSION – January 2026
 """
 
 from typing import Dict, Any, List, Tuple
 import json
 import re
 import time
-from datetime import datetime, timedelta
 
 from groq import Groq
 
@@ -19,7 +18,7 @@ from groq import Groq
 
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-# SINGLE GLOBAL CLIENT (recommended pattern)
+# SINGLE GLOBAL CLIENT
 client = Groq(
     api_key="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"
 )
@@ -28,15 +27,14 @@ client = Groq(
 # UTIL
 # ------------------------------------------------------------------
 
-def _safe_json_parse(content: str, function_name: str) -> Dict[str, Any] | None:
+def _safe_json_parse(content: str, function_name: str) -> Dict[str, Any] | List[Any] | None:
     """
-    Safely parse LLM output as JSON with fallback regex cleanup.
+    Safely parse LLM output as JSON (object OR array) with regex fallback.
     """
     try:
         return json.loads(content.strip())
     except json.JSONDecodeError:
-        # Try to extract the JSON-like block
-        match = re.search(r'\{.*\}', content, re.DOTALL)
+        match = re.search(r'\{.*\}|\[.*\]', content, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(0))
@@ -58,7 +56,7 @@ You are an expert Gmail query parser.
 
 User query: "{user_query}"
 
-Return ONLY valid JSON object with these keys:
+Return ONLY valid JSON:
 {{
   "keywords": str or null,
   "from": str or null,
@@ -69,7 +67,7 @@ Return ONLY valid JSON object with these keys:
   "before_date": "YYYY/MM/DD" or null,
   "action_required": bool,
   "inbox": bool,
-  "clarification_needed": str or null (only if ambiguous)
+  "clarification_needed": str or null
 }}
 """
 
@@ -82,14 +80,16 @@ Return ONLY valid JSON object with these keys:
                 max_tokens=250,
                 response_format={"type": "json_object"},
             )
-            parsed = _safe_json_parse(response.choices[0].message.content.strip(), "parse_user_query")
-            if parsed:
+            parsed = _safe_json_parse(
+                response.choices[0].message.content,
+                "parse_user_query"
+            )
+            if isinstance(parsed, dict):
                 return parsed
         except Exception as e:
             print(f"[parse_user_query] attempt {attempt+1} failed: {e}")
             time.sleep(0.8)
 
-    # Hard fallback
     return {
         "keywords": user_query,
         "from": None,
@@ -108,7 +108,6 @@ Return ONLY valid JSON object with these keys:
 # ------------------------------------------------------------------
 
 def build_gmail_query(filters: Dict[str, Any]) -> str:
-    """Convert parsed filters to Gmail search syntax."""
     parts = []
 
     if filters.get("keywords"):
@@ -140,22 +139,21 @@ def summarize_email(
     body: str,
     thread_context: str = ""
 ) -> Dict[str, Any]:
-    """Summarize email content and classify intent using LLM."""
     prompt = f"""
-Summarize this email clearly and analyze its intent.
+Summarize this email clearly and analyze intent.
 
 Subject: {subject}
 From: {sender}
-Body excerpt: {body[:6000]}
+Body: {body[:6000]}
 Thread context: {thread_context[:1000]}
 
-Return ONLY valid JSON:
+Return ONLY JSON:
 {{
-  "summary": "1-2 sentence clear summary",
-  "tone": "positive|negative|neutral|urgent|formal|friendly|other",
+  "summary": "...",
+  "tone": "...",
   "urgency": "low|medium|high",
   "action_required": true|false,
-  "key_points": ["point 1", "point 2", ...]
+  "key_points": []
 }}
 """
 
@@ -168,15 +166,17 @@ Return ONLY valid JSON:
                 max_tokens=400,
                 response_format={"type": "json_object"},
             )
-            parsed = _safe_json_parse(response.choices[0].message.content.strip(), "summarize_email")
-            if parsed:
+            parsed = _safe_json_parse(
+                response.choices[0].message.content,
+                "summarize_email"
+            )
+            if isinstance(parsed, dict):
                 parsed.setdefault("fallback_used", False)
                 return parsed
         except Exception as e:
             print(f"[summarize_email] attempt {attempt+1} failed: {e}")
         time.sleep(0.6)
 
-    # Fallback
     return {
         "summary": f"{subject} from {sender}",
         "tone": "neutral",
@@ -187,120 +187,74 @@ Return ONLY valid JSON:
     }
 
 # ------------------------------------------------------------------
-# REAL MESSAGE EXTRACTION (rule-based)
+# EMAIL REWRITER (FIXED SIGNATURE)
 # ------------------------------------------------------------------
 
-def extract_real_message(raw: str) -> Tuple[str | None, str | None]:
+def rewrite_email(
+    body_text: str,
+    subject: str | None = None,
+    context: str = "",
+    style: str = "natural"
+) -> Dict[str, str]:
     """
-    Rule-based extraction of the actual message content from natural language input.
-    Returns (suggested_subject, real_content) or (None, None)
+    Rewrite raw text into a polished email.
+    Compatible with EmailAgent.
     """
-    if not raw:
-        return None, None
 
-    raw_lower = raw.lower()
-
-    # Common patterns: "send ... saying ...", "email ... about ...", etc.
-    separators = [
-        r'\bsay(?:ing|in)?\b',
-        r'\b(?:regarding|about|on|for)\b',
-        r':\s*',
-        r'[-–—]\s*',
-        r'\bthat\b',
-    ]
-
-    for pattern in separators:
-        parts = re.split(pattern, raw, maxsplit=1, flags=re.IGNORECASE)
-        if len(parts) == 2:
-            before, after = parts
-            after = after.strip().strip('"').strip("'").strip()
-            if len(after) > 3:
-                # Guess subject
-                if any(w in before.lower() for w in ['leave', 'sick', 'fever', 'absent', 'medical']):
-                    subject = "Leave Request"
-                elif any(w in before.lower() for w in ['urgent', 'important', 'asap']):
-                    subject = "Urgent Message"
-                elif 'meeting' in before.lower():
-                    subject = "Meeting Update"
-                else:
-                    subject = "Message"
-                return subject, after
-
-    # Fallback: after email address
-    email_match = re.search(r'[\w\.-]+@[\w\.-]+', raw)
-    if email_match:
-        after_email = raw[email_match.end():].strip()
-        after_email = re.sub(r'^(?:regarding|about|saying|that|:|-|–|—)\s*', '', after_email, flags=re.I)
-        after_email = after_email.strip().strip('"').strip("'")
-        if len(after_email) > 3:
-            return "Message", after_email
-
-    return None, None
-
-# ------------------------------------------------------------------
-# EMAIL REWRITER
-# ------------------------------------------------------------------
-
-def rewrite_email(body_text: str = "") -> Dict[str, str]:
-    """Turn raw user input into polished email (subject + body)."""
     raw = (body_text or "").strip()
     if not raw:
-        return {"subject": "Empty Message", "body": "(no content)"}
+        return {"subject": subject or "Message", "body": "(no content)"}
 
     prompt = f"""
-USER INPUT: "{raw}"
+USER INPUT:
+{raw}
 
-TASK: Rewrite into a complete, polished, professional email.
+CONTEXT:
+{context}
 
-RULES:
-1. Expand appropriately: routine → 2-3 sentences, situational → 3-4, social/sarcastic → witty 4-5
-2. Preserve key user words (sick, pls, urgent, etc.)
-3. Start with "Hi [Name]," — end with "Best regards, Sathwik"
-4. No meta phrases like "send mail saying"
-5. Keep natural tone
+STYLE:
+{style}
 
-RETURN ONLY JSON:
+Rewrite into a complete, professional email.
+
+Return ONLY JSON:
 {{
-  "subject": "Professional subject line",
-  "body": "Full email body"
+  "subject": "...",
+  "body": "..."
 }}
 """
-
-    system = (
-        "You are an elite ghostwriter. "
-        "Transform raw thoughts into intelligent, articulate emails."
-    )
 
     try:
         response = client.chat.completions.create(
             model=DEFAULT_MODEL,
             messages=[
-                {"role": "system", "content": system},
+                {"role": "system", "content": "You are an expert email writer."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.5,
-            max_tokens=800,
-            response_format={"type": "json_object"}
+            temperature=0.4,
+            max_tokens=700,
+            response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content.strip()
-        parsed = json.loads(content)
+        parsed = json.loads(response.choices[0].message.content)
         return {
-            "subject": parsed.get("subject", "Message"),
+            "subject": parsed.get("subject", subject or "Message"),
             "body": parsed.get("body", raw)
         }
     except Exception as e:
         print(f"[rewrite_email] failed: {e}")
-        return {"subject": "Message", "body": raw}
+        return {
+            "subject": subject or "Message",
+            "body": raw
+        }
 
 # ------------------------------------------------------------------
-# EMAIL FILTER (LLM ranking)
+# EMAIL FILTER (FIXED JSON ARRAY HANDLING)
 # ------------------------------------------------------------------
 
 def filter_emails_llm(
     emails: List[Dict[str, Any]],
     user_query: str
 ) -> List[Dict[str, Any]]:
-    """Rank emails by relevance to user query using LLM."""
     if not emails:
         return []
 
@@ -310,87 +264,90 @@ def filter_emails_llm(
     ]
 
     prompt = f"""
-Rank these emails by relevance to the user query (0–10 scale).
+Rank emails by relevance (0–10).
 
 User query: "{user_query}"
 
 Emails:
-{"\n".join(snippets)}
+{chr(10).join(snippets)}
 
-Return ONLY JSON array of objects with score >= 5:
+Return JSON ARRAY ONLY:
 [
-  {{"index": 1, "relevance_score": 8, "reason": "short reason"}}
+  {{"index": 1, "relevance_score": 8, "reason": "..."}}
 ]
 """
 
-    for attempt in range(3):
+    for _ in range(3):
         try:
             response = client.chat.completions.create(
                 model=DEFAULT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=500,
-                response_format={"type": "json_object"},
+                max_tokens=400,
             )
-            parsed = _safe_json_parse(response.choices[0].message.content.strip(), "filter_emails_llm")
+            parsed = _safe_json_parse(
+                response.choices[0].message.content,
+                "filter_emails_llm"
+            )
+
             if isinstance(parsed, list):
-                scored = []
+                ranked = []
                 for item in parsed:
                     idx = item.get("index")
                     if isinstance(idx, int) and 1 <= idx <= len(emails):
                         e = emails[idx - 1].copy()
                         e["relevance_score"] = item.get("relevance_score", 0)
                         e["relevance_reason"] = item.get("reason", "")
-                        scored.append(e)
-                return sorted(scored, key=lambda x: x["relevance_score"], reverse=True)
+                        ranked.append(e)
+                return sorted(ranked, key=lambda x: x["relevance_score"], reverse=True)
         except Exception:
             time.sleep(0.5)
 
     return emails[:10]
 
 # ------------------------------------------------------------------
-# RECIPIENT EXTRACTION (LLM + rule-based hybrid)
+# RECIPIENT EXTRACTION (FIXED: STRING + DICT SAFE)
 # ------------------------------------------------------------------
 
-def extract_recipients(text: str) -> Dict[str, Any]:
+def extract_recipients(text: str | Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract recipients from natural language input.
-    Supports: "send to thanujram@gmail.com", "email boss and john", etc.
+    Extract recipients from string OR structured input.
     """
-    # Step 1: Fast regex for obvious emails
+
+    if isinstance(text, dict):
+        text = (
+            text.get("body")
+            or text.get("text")
+            or text.get("content")
+            or ""
+        )
+    else:
+        text = text or ""
+
     email_pattern = r'[\w\.-]+@[\w\.-]+\.[\w]+'
     found_emails = re.findall(email_pattern, text)
 
-    # Step 2: If we have clear emails → use them
     if found_emails:
-        main = found_emails[0]
         return {
             "emails": found_emails,
-            "main_recipient": main,
-            "cc_candidates": found_emails[1:] if len(found_emails) > 1 else [],
+            "main_recipient": found_emails[0],
+            "cc_candidates": found_emails[1:],
             "guessed": [],
-            "reasoning": "Found explicit email addresses in text"
+            "reasoning": "Explicit email address(es) found"
         }
 
-    # Step 3: LLM fallback for name-based extraction
     prompt = f"""
-Extract email recipients from this natural language input:
+Extract email recipients from this text:
 
-Text: "{text}"
-
-Rules:
-- Find any explicit email addresses
-- If only names → guess likely emails (gmail.com > yahoo.com > outlook.com)
-- Identify main recipient (first after "to"/"send"/"email")
-- Detect possible CC/BCC mentions
+"{text}"
 
 Return ONLY JSON:
 {{
-  "emails": ["email1@gmail.com", ...],
-  "main_recipient": "primary@email.com" or null,
-  "cc_candidates": ["cc1", "cc2"],
-  "guessed": ["name@gmail.com", ...],
-  "reasoning": "brief explanation"
+  "emails": [],
+  "main_recipient": null,
+  "cc_candidates": [],
+  "guessed": [],
+  "reasoning": "..."
 }}
 """
 
@@ -403,23 +360,25 @@ Return ONLY JSON:
                 max_tokens=300,
                 response_format={"type": "json_object"},
             )
-            parsed = _safe_json_parse(response.choices[0].message.content.strip(), "extract_recipients")
-            if parsed and isinstance(parsed, dict):
+            parsed = _safe_json_parse(
+                response.choices[0].message.content,
+                "extract_recipients"
+            )
+            if isinstance(parsed, dict):
                 parsed.setdefault("emails", [])
                 parsed.setdefault("main_recipient", None)
                 parsed.setdefault("cc_candidates", [])
                 parsed.setdefault("guessed", [])
-                parsed.setdefault("reasoning", "No clear recipients found")
+                parsed.setdefault("reasoning", "LLM inference")
                 return parsed
         except Exception as e:
             print(f"[extract_recipients] attempt {attempt+1} failed: {e}")
-            time.sleep(0.7)
+            time.sleep(0.6)
 
-    # Ultimate fallback
     return {
         "emails": [],
         "main_recipient": None,
         "cc_candidates": [],
         "guessed": [],
-        "reasoning": "No recipients could be extracted"
+        "reasoning": "No recipients found"
     }

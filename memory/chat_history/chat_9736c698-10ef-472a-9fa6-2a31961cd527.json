@@ -1,0 +1,39 @@
+{
+  "session_id": "9736c698-10ef-472a-9fa6-2a31961cd527",
+  "created_at": "2026-01-31T05:23:02.937929Z",
+  "last_updated": "2026-01-31T05:23:02.940926Z",
+  "turns": [
+    {
+      "timestamp": "2026-01-31T05:23:02.940926Z",
+      "user_query": "check my today's mails and plan my day accordingly",
+      "main_planner": {
+        "execution_path": "perceive_then_act",
+        "context_domains": [
+          "gmail",
+          "calendar"
+        ],
+        "confidence": 0.9,
+        "reasoning": "Checking emails and planning the day requires perceiving email content and calendar schedule"
+      },
+      "planner": {
+        "summary": "Analysis complete: No tasks identified.",
+        "tool_calls": []
+      },
+      "perception_summary": "Checking emails and planning the day requires perceiving email content and calendar schedule",
+      "plan_summary": "Analysis complete: No tasks identified.",
+      "action_results": "Analysis complete: No tasks identified.",
+      "final_response": "Done! Analysis complete: No tasks identified.",
+      "status": "success",
+      "duration_seconds": 50.65,
+      "metadata": {
+        "agents_involved": [
+          "supervisor",
+          "main_planner",
+          "planner"
+        ],
+        "execution_path": "perceive_then_act",
+        "error": null
+      }
+    }
+  ]
+}

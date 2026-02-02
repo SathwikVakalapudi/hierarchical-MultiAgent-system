@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """
 tools.gmail.agent - Intelligent Email Specialist Agent
-Updated Jan 2026: Supports structured email_tasks + human confirmation before send
+FINAL PRODUCTION VERSION – January 2026
 """
 
 from typing import List, Dict, Any, Optional
@@ -10,31 +10,38 @@ from typing import List, Dict, Any, Optional
 from groq import Groq
 from .query_engine import process_gmail_query
 from .sender import send_simple_mail
-from .llm import rewrite_email, extract_recipients  # assuming typo fixed: extract_recipients
+from .llm import rewrite_email, extract_recipients
 
+# ------------------------------------------------------------------
+# CONFIG
+# ------------------------------------------------------------------
 
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
-GROQ_API_KEY = "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"
 
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(
+    api_key="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"
+)
 
+# ------------------------------------------------------------------
+# EMAIL AGENT
+# ------------------------------------------------------------------
 
 class EmailAgent:
-    def __init__(self, llm_client: Groq = None):
+    def __init__(self, llm_client: Groq | None = None):
         self.llm = llm_client or client
         self.model = DEFAULT_MODEL
         self.my_email = "sathwikvakalapudi@gmail.com"
 
+    # ------------------------------------------------------------------
+    # MAIN ENTRY
+    # ------------------------------------------------------------------
+
     def process(self, input_data: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
-        """
-        Main entry point.
-        Returns structured result including pending_emails when confirmation is required.
-        """
         user_query = input_data.get("user_query", "").strip()
         email_tasks: List[Dict[str, Any]] = input_data.get("email_tasks", [])
         observations: Dict[str, Any] = input_data.get("observations", {})
-        user_feedback: Optional[str] = input_data.get("email_feedback")          # from previous round
-        confirmed: bool = input_data.get("confirmed", False)                     # did user approve?
+        user_feedback: Optional[str] = input_data.get("email_feedback")
+        confirmed: bool = input_data.get("confirmed", False)
 
         if not email_tasks:
             return {
@@ -43,7 +50,7 @@ class EmailAgent:
                 "changes_summary": "No actions taken.",
                 "success": False,
                 "awaiting_confirmation": False,
-                "pending_emails": []
+                "pending_emails": [],
             }
 
         tool_calls: List[Dict[str, Any]] = []
@@ -51,11 +58,15 @@ class EmailAgent:
         changes: List[str] = []
         pending_emails: List[Dict[str, Any]] = []
 
-        for task in email_tasks:
+        for idx, task in enumerate(email_tasks):
             if isinstance(task, str):
                 task = {"action": "send", "body": task}
 
             action = task.get("action", "unknown").lower()
+
+            # ----------------------------------------------------------
+            # SEND / REPLY
+            # ----------------------------------------------------------
 
             if action in ("send", "reply"):
                 if action == "send":
@@ -63,61 +74,60 @@ class EmailAgent:
                 else:
                     args = self._prepare_reply_args(task, user_query, observations, user_feedback)
 
-                if not args.get("to") or "@" not in args["to"]:
-                    reasoning_parts.append(f"Could not determine valid recipient for task → skipped")
+                to = args.get("to")
+
+                if not to or "@" not in to:
+                    reasoning_parts.append("Could not determine a valid recipient → skipped")
                     changes.append("Task skipped: invalid recipient")
                     continue
 
-                email_preview = {
+                preview = {
                     "action": action,
-                    "to": args["to"],
+                    "to": to,
                     "subject": args["subject"],
                     "body": args["body_text"],
-                    "original_query_snippet": user_query[:100] + "..." if len(user_query) > 100 else user_query,
-                    "task_index": email_tasks.index(task),  # optional - helps track which task
+                    "original_query_snippet": (
+                        user_query[:100] + "..." if len(user_query) > 100 else user_query
+                    ),
+                    "task_index": idx,
                 }
 
-                # ── Confirmation logic ───────────────────────────────────────
                 if confirmed and not dry_run:
-                    # User already approved this email → send it now
                     tool_calls.append({
                         "name": "send_simple_mail",
                         "arguments": {
-                            "to": args["to"],
+                            "to": to,
                             "subject": args["subject"],
                             "body_text": args["body_text"],
-                        }
+                        },
                     })
-                    changes.append(f"Sent {action} to {args['to']} – Subject: {args['subject']}")
-                    reasoning_parts.append(f"**Sent confirmed {action}** to **{args['to']}**")
+                    reasoning_parts.append(f"Sent confirmed {action} to {to}")
+                    changes.append(f"Sent {action} to {to}")
                 else:
-                    # Not yet confirmed → ask user
-                    pending_emails.append(email_preview)
+                    pending_emails.append(preview)
                     reasoning_parts.append(
-                        f"Prepared {action} to **{args['to']}** "
-                        f"(subject: {args['subject'][:60]}...) – **awaiting confirmation**"
+                        f"Prepared {action} to {to} (subject: {args['subject']}) — awaiting confirmation"
                     )
-                    changes.append(f"Prepared email to {args['to']} – waiting for approval")
+                    changes.append(f"Prepared email to {to}")
+
+            # ----------------------------------------------------------
+            # SEARCH
+            # ----------------------------------------------------------
 
             elif action == "search":
                 search_result = self._handle_search_task(task.get("query", user_query))
-                status = search_result.get("status", "error")
                 emails = search_result.get("result", [])
 
-                if status == "success" and emails:
+                if search_result.get("status") == "success" and emails:
                     count = len(emails)
-                    top_emails = "\n".join(
-                        f"- **{e['sender']}**: {e['subject']}\n  {e['summary'].get('summary', 'No summary')}"
-                        for e in emails[:5]
-                    )
+                    reasoning_parts.append(f"Found {count} matching emails")
                     changes.append(f"Retrieved {count} email(s)")
-                    reasoning_parts.append(f"**Found {count} emails**:\n{top_emails}")
                 else:
-                    changes.append("No matching emails found")
                     reasoning_parts.append("Search returned no results")
+                    changes.append("No matching emails found")
 
             else:
-                reasoning_parts.append(f"Skipped unknown action: {action}")
+                reasoning_parts.append(f"Unknown action skipped: {action}")
                 changes.append("Task skipped")
 
         return {
@@ -129,79 +139,94 @@ class EmailAgent:
             "pending_emails": pending_emails,
         }
 
+    # ------------------------------------------------------------------
+    # SEND
+    # ------------------------------------------------------------------
+
     def _prepare_send_args(
         self,
         task: Dict[str, Any],
         full_query: str,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
     ) -> Dict[str, str]:
-        to = extract_recipients(task).get("main_recipient", self.my_email)
 
-        body = task.get("body", full_query).strip()
+        recipient_source = (
+            task.get("to")
+            or task.get("body")
+            or full_query
+            or ""
+        )
 
-        extra_prompt = ""
+        to = extract_recipients(recipient_source).get(
+            "main_recipient",
+            self.my_email,
+        )
+
+        body = (task.get("body") or full_query or "").strip()
+
+        context = f"Original request: {full_query}"
         if feedback:
-            extra_prompt = f"\nUser requested changes / feedback:\n{feedback}\nApply these improvements."
+            context += f"\nUser feedback:\n{feedback}"
 
-        try:
-            rewritten = rewrite_email(
-                body_text=body,
-                context=f"Original request: {full_query}{extra_prompt}",
-                style="natural, friendly, concise"
-            )
-        except Exception as e:
-            print(f"[Send] Rewrite failed: {e}")
-            rewritten = {
-                "subject": "Message from Sathwik",
-                "body": f"Hello,\n\n{body}\n\nBest regards,\nSathwik"
-            }
+        rewritten = rewrite_email(
+            body_text=body,
+            context=context,
+            style="natural, friendly, concise",
+        )
 
         return {
             "to": to,
             "subject": rewritten["subject"],
             "body_text": rewritten["body"],
         }
+
+    # ------------------------------------------------------------------
+    # REPLY
+    # ------------------------------------------------------------------
 
     def _prepare_reply_args(
         self,
         task: Dict[str, Any],
         full_query: str,
         observations: Dict[str, Any],
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
     ) -> Dict[str, str]:
-        to = extract_recipients(task).get("main_recipient", self.my_email)
-        body = task.get("body", full_query).strip()
 
-        thread_id = task.get("thread_id")
-        original_subject = "Re: Previous Message"
-        context_snippet = ""
+        recipient_source = (
+            task.get("to")
+            or task.get("body")
+            or full_query
+            or ""
+        )
 
-        if thread_id:
-            context_snippet = "\n\n--- Replying in thread ---\n"
+        to = extract_recipients(recipient_source).get(
+            "main_recipient",
+            self.my_email,
+        )
 
-        extra_prompt = ""
+        body = (task.get("body") or full_query or "").strip()
+        subject = task.get("subject") or "Re: Previous Message"
+
+        context = "Replying to an existing email thread."
         if feedback:
-            extra_prompt = f"\nUser feedback on draft:\n{feedback}\nRevise accordingly."
+            context += f"\nUser feedback:\n{feedback}"
 
-        try:
-            rewritten = rewrite_email(
-                subject=original_subject,
-                body_text=f"{body}{context_snippet}",
-                style="professional",
-                context=f"Reply to incoming email{extra_prompt}"
-            )
-        except Exception as e:
-            print(f"[Reply] Rewrite failed: {e}")
-            rewritten = {
-                "subject": original_subject,
-                "body": f"{body}\n\nBest regards,\nSathwik"
-            }
+        rewritten = rewrite_email(
+            subject=subject,
+            body_text=body,
+            context=context,
+            style="professional",
+        )
 
         return {
             "to": to,
             "subject": rewritten["subject"],
             "body_text": rewritten["body"],
         }
+
+    # ------------------------------------------------------------------
+    # SEARCH
+    # ------------------------------------------------------------------
 
     def _handle_search_task(self, query: str) -> Dict[str, Any]:
         try:
